@@ -2,6 +2,7 @@ import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import subprocess
+import shutil
 import os
 from pathlib import Path
 from src.config_manager import ConfigManager
@@ -82,7 +83,6 @@ class ScriptManager:
         env_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="环境", menu=env_menu)
         env_menu.add_command(label="添加环境", command=self.add_env)
-        env_menu.add_command(label="编辑环境", command=self.edit_env)
         env_menu.add_command(label="删除环境", command=self.remove_env)
         env_menu.add_command(label="测试环境", command=self.test_env)
         
@@ -267,9 +267,7 @@ class ScriptManager:
                 env_frame = ttk.Frame(frame)
                 env_frame.pack(fill='x', padx=5, pady=2)
                 ttk.Label(env_frame, text="Python环境:").pack(side=tk.LEFT)
-                # 获取环境名称列表
-                env_names = [env["name"] for env in self.config["python_environments"]]
-                widgets['env_combo'] = ttk.Combobox(env_frame, state='readonly', values=env_names)
+                widgets['env_combo'] = ttk.Combobox(env_frame, state='readonly')
                 widgets['env_combo'].pack(side=tk.LEFT, fill='x', expand=True)
             
             if info["supports_output"] or info["supports_interactive"]:
@@ -312,14 +310,13 @@ class ScriptManager:
             btn_frame.pack(fill='x', padx=5, pady=5)
             ttk.Button(btn_frame, text="运行脚本",
                       command=self.run_script).pack(side=tk.RIGHT)
+            ttk.Button(btn_frame, text="用编辑器打开",
+                      command=self.open_in_editor).pack(side=tk.LEFT, padx=5)
             ttk.Button(btn_frame, text="打开所在文件夹",
                       command=self.open_script_location).pack(side=tk.LEFT)
         
         # 默认显示Python配置
         self.show_config_frame("python")
-        
-        # 初始化时更新环境列表
-        self.update_run_config_env_list()
     
     def show_config_frame(self, script_type):
         """显示指定类型的配置框架"""
@@ -352,6 +349,7 @@ class ScriptManager:
         self.context_menu.add_command(label="运行", command=self.run_script)
         self.context_menu.add_command(label="编辑", command=self.edit_script_config)
         self.context_menu.add_command(label="打开所在文件夹", command=self.open_script_location)
+        self.context_menu.add_command(label="用编辑器打开", command=self.open_in_editor)
         self.context_menu.add_command(label="删除", command=self.remove_script)
         
         # 绑定右键菜单
@@ -522,10 +520,11 @@ class ScriptManager:
                 else:
                     script_type = "python"
             
-            # 弹出配置对话框
+            # 弹出配置对话框（传入初始文件路径，用户可在对话框中修改）
             dialog = ScriptConfigDialog(
-                self.root, 
+                self.root,
                 self.config["python_environments"],
+                path=file_path,
                 categories=self.config["scripts"].keys(),
                 script_type=script_type
             )
@@ -533,7 +532,7 @@ class ScriptManager:
             if dialog.result:
                 script_info = {
                     "name": dialog.script_name,
-                    "path": file_path,
+                    "path": getattr(dialog, "path", file_path),
                     "env": dialog.selected_env if script_type == "python" else "",
                     "description": dialog.description,
                     "category": dialog.category,
@@ -608,28 +607,13 @@ class ScriptManager:
             return
         
         try:
+            # 获取对应的运行器
+            runner_class = RunnerFactory.get_runner(script.get("script_type", "python"))
+            runner = runner_class(script, self.config)
+            
             # 获取当前类型的控件
             widgets = self.config_widgets[current_type]
             info = self.script_types[current_type]
-            
-            # 创建脚本信息的副本用于运行（避免修改原始配置）
-            script_for_run = script.copy()
-            
-            # 如果是Python脚本，从运行配置面板获取选择的环境
-            selected_env = None  # 用于保存设置，只有用户明确选择时才设置
-            if current_type == "python" and "env_combo" in widgets:
-                env_value = widgets['env_combo'].get().strip()
-                # 如果下拉框有选择值，使用选择的环境
-                if env_value:
-                    script_for_run["env"] = env_value
-                    selected_env = env_value  # 用于保存设置
-                # 如果下拉框为空，使用脚本配置中的默认环境（但不保存）
-                elif script.get("env"):
-                    script_for_run["env"] = script.get("env")
-            
-            # 获取对应的运行器
-            runner_class = RunnerFactory.get_runner(script_for_run.get("script_type", "python"))
-            runner = runner_class(script_for_run, self.config)
             
             # 准备参数
             arguments = ""
@@ -650,11 +634,6 @@ class ScriptManager:
             # 如果选择保存设置且脚本类型支持这些功能
             if hasattr(self, 'save_var') and self.save_var.get():
                 save_data = {}
-                
-                # 如果是Python脚本且选择了环境，保存环境设置
-                if current_type == "python" and selected_env:
-                    save_data["env"] = selected_env
-                
                 if info["supports_output"] or info["supports_interactive"]:
                     if arguments:
                         save_data["arguments"] = arguments
@@ -725,10 +704,11 @@ class ScriptManager:
             dialog = ScriptConfigDialog(
                 self.root,
                 self.config["python_environments"],
-                script["name"],
-                script.get("env", ""),
-                script.get("description", ""),
-                script_category,
+                name=script["name"],
+                path=script.get("path", ""),
+                env=script.get("env", ""),
+                description=script.get("description", ""),
+                category=script_category,
                 categories=self.config["scripts"].keys(),  # 传入当前分类列表
                 script_type=script.get("script_type", "python")  # 传入脚本类型
             )
@@ -743,7 +723,8 @@ class ScriptManager:
                         "name": dialog.script_name,
                         "env": dialog.selected_env,
                         "description": dialog.description,
-                        "category": dialog.category
+                        "category": dialog.category,
+                        "path": getattr(dialog, "path", script.get("path", ""))
                     })
                     # 添加到新分类
                     self.config["scripts"][dialog.category].append(script)
@@ -752,7 +733,8 @@ class ScriptManager:
                     script.update({
                         "name": dialog.script_name,
                         "env": dialog.selected_env,
-                        "description": dialog.description
+                        "description": dialog.description,
+                        "path": getattr(dialog, "path", script.get("path", ""))
                     })
                 
                 self.config_manager.save_config()
@@ -774,104 +756,43 @@ class ScriptManager:
                 }
                 self.config["python_environments"].append(env_info)
                 self.config_manager.save_config()
-                # 更新环境列表（如果存在）
-                if hasattr(self, 'env_tree'):
-                    self.update_env_list()
-                # 更新运行配置面板中的下拉框
-                self.update_run_config_env_list()
-    
-    def edit_env(self):
-        """编辑选中的环境"""
-        # 如果没有环境，提示用户
-        if not self.config["python_environments"]:
-            messagebox.showinfo("提示", "没有可编辑的环境")
-            return
-        
-        # 创建环境选择对话框
-        env_names = [env["name"] for env in self.config["python_environments"]]
-        selected_env_name = self._select_env_dialog("选择要编辑的环境", env_names)
-        
-        if selected_env_name:
-            # 找到对应的环境
-            env = next((env for env in self.config["python_environments"] 
-                       if env["name"] == selected_env_name), None)
-            
-            if env:
-                # 打开编辑对话框，传入现有的名称和描述
-                dialog = EnvConfigDialog(
-                    self.root, 
-                    env["path"], 
-                    env_name=env["name"],
-                    description=env.get("description", "")
-                )
-                if dialog.result:
-                    # 更新环境信息
-                    env["name"] = dialog.env_name
-                    env["description"] = dialog.description
-                    # 如果路径改变了，也更新路径
-                    # 注意：EnvConfigDialog 目前不支持编辑路径，如果需要可以扩展
-                    
-                    self.config_manager.save_config()
-                    # 更新环境列表（如果存在）
-                    if hasattr(self, 'env_tree'):
-                        self.update_env_list()
-                    # 更新运行配置面板中的下拉框
-                    self.update_run_config_env_list()
-                    messagebox.showinfo("成功", f"已更新环境 {dialog.env_name}")
+                self.update_env_list()
     
     def remove_env(self):
         """删除选中的环境"""
-        # 如果没有环境，提示用户
-        if not self.config["python_environments"]:
-            messagebox.showinfo("提示", "没有可删除的环境")
-            return
-        
-        # 创建环境选择对话框
-        env_names = [env["name"] for env in self.config["python_environments"]]
-        selected_env = self._select_env_dialog("选择要删除的环境", env_names)
-        
-        if selected_env:
-            if messagebox.askyesno("确认", f"确定要删除环境 {selected_env} 吗?"):
+        selection = self.env_tree.selection()
+        if selection:
+            item = selection[0]
+            env_name = self.env_tree.item(item)["text"]
+            
+            if messagebox.askyesno("确认", f"确定要删除环境 {env_name} 吗?"):
                 # 找到并删除环境
                 for i, env in enumerate(self.config["python_environments"]):
-                    if env["name"] == selected_env:
+                    if env["name"] == env_name:
                         del self.config["python_environments"][i]
                         self.config_manager.save_config()
-                        # 更新环境列表（如果存在）
-                        if hasattr(self, 'env_tree'):
-                            self.update_env_list()
-                        # 更新运行配置面板中的下拉框
-                        self.update_run_config_env_list()
-                        messagebox.showinfo("成功", f"已删除环境 {selected_env}")
+                        self.update_env_list()
                         break
     
     def test_env(self):
         """测试选中的Python环境"""
-        # 如果没有环境，提示用户
-        if not self.config["python_environments"]:
-            messagebox.showinfo("提示", "没有可测试的环境")
-            return
-        
-        # 创建环境选择对话框
-        env_names = [env["name"] for env in self.config["python_environments"]]
-        selected_env = self._select_env_dialog("选择要测试的环境", env_names)
-        
-        if selected_env:
+        selection = self.env_tree.selection()
+        if selection:
+            item = selection[0]
+            env_name = self.env_tree.item(item)["text"]
+            
             # 找到对应的环境
             env = next((env for env in self.config["python_environments"] 
-                       if env["name"] == selected_env), None)
+                       if env["name"] == env_name), None)
             
             if env:
                 try:
                     result = subprocess.run(
                         [env["path"], "--version"],
                         capture_output=True,
-                        text=True,
-                        timeout=10
+                        text=True
                     )
                     messagebox.showinfo("环境测试", f"环境正常\n{result.stdout}")
-                except subprocess.TimeoutExpired:
-                    messagebox.showerror("错误", "测试超时")
                 except Exception as e:
                     messagebox.showerror("错误", f"测试环境时出错: {str(e)}")
     
@@ -954,33 +875,23 @@ class ScriptManager:
     
     def update_env_list(self):
         """更新环境列表"""
-        if hasattr(self, 'env_tree'):
-            self.env_tree.delete(*self.env_tree.get_children())
-            
-            # 更新环境下拉框的值
-            env_names = []
-            
-            for env in self.config["python_environments"]:
-                self.env_tree.insert(
-                    "", 
-                    "end",
-                    text=env["name"],
-                    values=(env["path"], env.get("description", ""))
-                )
-                env_names.append(env["name"])
+        self.env_tree.delete(*self.env_tree.get_children())
+        
+        # 更新环境下拉框的值
+        env_names = []
+        
+        for env in self.config["python_environments"]:
+            self.env_tree.insert(
+                "", 
+                "end",
+                text=env["name"],
+                values=(env["path"], env.get("description", ""))
+            )
+            env_names.append(env["name"])
         
         # 更新运行配置面板中的环境选择下拉框
-        self.update_run_config_env_list()
-    
-    def update_run_config_env_list(self):
-        """更新运行配置面板中的环境下拉框"""
-        # 获取环境名称列表
-        env_names = [env["name"] for env in self.config["python_environments"]]
-        
-        # 更新所有脚本类型的下拉框
-        for script_type, widgets in self.config_widgets.items():
-            if "env_combo" in widgets:
-                widgets['env_combo']['values'] = env_names
+        if hasattr(self, 'env_combo'):
+            self.env_combo['values'] = env_names
     
     def show_env_context_menu(self, event):
         """显示环境右键菜单"""
@@ -1063,7 +974,79 @@ class ScriptManager:
                     subprocess.run(["xdg-open", script_dir])
             except Exception as e:
                 messagebox.showerror("错误", f"打开目录失败: {str(e)}")
-    
+
+    def open_in_editor(self):
+        """用编辑器打开选中脚本"""
+        current_type = self.get_current_script_type()
+        tree = self.script_trees[current_type]
+        selection = tree.selection()
+        if not selection:
+            return
+
+        item = selection[0]
+        parent = tree.parent(item)
+
+        # 如果选中的是分类节点，则返回
+        if not parent:
+            return
+
+        # 获取脚本名称
+        script_name = tree.item(item)["text"]
+
+        # 在所有分类中查找脚本
+        script = None
+        for category in self.config["scripts"].values():
+            for s in category:
+                if s["name"] == script_name:
+                    script = s
+                    break
+            if script:
+                break
+
+        if script and "path" in script:
+            try:
+                script_path = Path(script["path"])
+                if not script_path.exists():
+                    messagebox.showerror("错误", "脚本文件不存在")
+                    return
+                # 优先使用 PATH 中的 `code` 命令
+                tried_paths = []
+                code_cmd = shutil.which("code")
+                if code_cmd:
+                    subprocess.run([code_cmd, str(script_path)])
+                    return
+
+                # 常见的 VSCode 可执行文件路径回退（Windows）
+                candidate_paths = [
+                    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Microsoft VS Code" / "Code.exe",
+                    Path(os.environ.get("PROGRAMFILES", "")) / "Microsoft VS Code" / "Code.exe",
+                    Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Microsoft VS Code" / "Code.exe",
+                ]
+
+                for p in candidate_paths:
+                    tried_paths.append(str(p))
+                    if p.exists():
+                        subprocess.run([str(p), str(script_path)])
+                        return
+
+                # 作为最终回退，尝试用系统默认程序打开该文件（若用户已将 VSCode 设为默认编辑器则可用）
+                try:
+                    os.startfile(script_path)
+                    return
+                except Exception:
+                    pass
+
+                # 如果都失败，给出更友好的提示并列出尝试过的路径
+                message = (
+                    "无法找到 VSCode 的命令行工具 `code` 或可执行文件。\\n"
+                    "请确保已在 PATH 中安装 `code`（在 VSCode 命令面板中运行 'Shell Command: Install \\'code\\' command in PATH'），\\n"
+                    "或者将 VSCode 可执行文件添加到 PATH，或手动在系统中打开文件。\\n\\n"
+                    f"已尝试路径:\\n{chr(10).join(tried_paths)}"
+                )
+                messagebox.showerror("错误", message)
+            except Exception as e:
+                messagebox.showerror("错误", f"打开编辑器失败: {str(e)}")
+
     def on_show_output_changed(self):
         """处理显示输出复选框状态变化"""
         if not self.show_output_var.get():
@@ -1073,70 +1056,6 @@ class ScriptManager:
         """处理交互模式复选框状态变化"""
         if self.interactive_var.get():
             self.show_output_var.set(True)  # 如果选择交互模式,则自动勾选显示输出
-    
-    def _select_env_dialog(self, title, env_names):
-        """创建环境选择对话框"""
-        if not env_names:
-            return None
-        
-        # 创建对话框
-        dialog = tk.Toplevel(self.root)
-        dialog.title(title)
-        dialog.geometry("300x200")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        result = [None]  # 使用列表以便在嵌套函数中修改
-        
-        # 标签
-        ttk.Label(dialog, text="请选择环境:").pack(pady=10)
-        
-        # 创建列表框
-        list_frame = ttk.Frame(dialog)
-        list_frame.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        listbox = tk.Listbox(list_frame)
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
-        listbox.config(yscrollcommand=scrollbar.set)
-        
-        for env_name in env_names:
-            listbox.insert(tk.END, env_name)
-        
-        listbox.pack(side=tk.LEFT, fill='both', expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill='y')
-        
-        # 默认选择第一项
-        if env_names:
-            listbox.selection_set(0)
-            listbox.see(0)
-        
-        # 按钮
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(fill='x', padx=10, pady=10)
-        
-        def ok():
-            selection = listbox.curselection()
-            if selection:
-                result[0] = listbox.get(selection[0])
-            dialog.destroy()
-        
-        def cancel():
-            dialog.destroy()
-        
-        ttk.Button(btn_frame, text="确定", command=ok).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(btn_frame, text="取消", command=cancel).pack(side=tk.RIGHT)
-        
-        # 绑定双击事件
-        listbox.bind('<Double-1>', lambda e: ok())
-        
-        # 绑定回车键
-        dialog.bind('<Return>', lambda e: ok())
-        dialog.bind('<Escape>', lambda e: cancel())
-        
-        dialog.focus_set()
-        dialog.wait_window()
-        
-        return result[0]
     
     def run(self):
         """运行主程序"""

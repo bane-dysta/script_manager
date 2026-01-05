@@ -3,12 +3,11 @@ from tkinter import ttk, filedialog, simpledialog
 from tkinter import messagebox
 import threading
 import queue
-import subprocess
 from pathlib import Path
 
 class ScriptConfigDialog:
     """脚本配置对话框"""
-    def __init__(self, parent, environments, name="", env="", description="", 
+    def __init__(self, parent, environments, name="", path="", env="", description="", 
                  category="其他", categories=None, script_type="python"):
         self.result = False
         
@@ -21,6 +20,7 @@ class ScriptConfigDialog:
         
         # 初始化变量
         self.env_var = tk.StringVar(value=env if env else "")
+        self.path_var = tk.StringVar(value=path if path else "")
         self.category_var = tk.StringVar(value=category)
         self.script_type_var = tk.StringVar(value=script_type)
         
@@ -30,6 +30,14 @@ class ScriptConfigDialog:
         self.name_entry.pack(fill='x', padx=5)
         self.name_entry.insert(0, name)
         
+        # 路径编辑（可选）
+        ttk.Label(self.dialog, text="脚本路径:").pack(pady=5)
+        path_frame = ttk.Frame(self.dialog)
+        path_frame.pack(fill='x', padx=5)
+        self.path_entry = ttk.Entry(path_frame, textvariable=self.path_var)
+        self.path_entry.pack(side=tk.LEFT, fill='x', expand=True)
+        ttk.Button(path_frame, text="浏览", command=self.browse_script_path).pack(side=tk.RIGHT, padx=(5,0))
+
         # 脚本类型选择
         ttk.Label(self.dialog, text="脚本类型:").pack(pady=5)
         self.script_type_combo = ttk.Combobox(
@@ -82,6 +90,18 @@ class ScriptConfigDialog:
         self.dialog.focus_set()
         self.dialog.wait_window()
     
+    def browse_script_path(self):
+        """选择脚本文件路径（用于编辑时修改路径）"""
+        file_path = filedialog.askopenfilename(
+            title="选择脚本文件",
+            filetypes=[
+                ("所有支持的文件", "*.py;*.bat;*.cmd;*.ps1;*.psm1;*.psd1;*.exe"),
+                ("所有文件", "*.*")
+            ]
+        )
+        if file_path:
+            self.path_var.set(file_path)
+
     def on_type_changed(self, event):
         """处理脚本类型变化"""
         if self.script_type_var.get() == "python":
@@ -93,6 +113,7 @@ class ScriptConfigDialog:
         """确认配置"""
         self.script_name = self.name_entry.get().strip()
         self.selected_env = self.env_var.get()
+        self.path = self.path_var.get().strip()
         self.category = self.category_var.get()
         self.description = self.desc_text.get('1.0', tk.END).strip()
         self.script_type = self.script_type_var.get()
@@ -285,7 +306,7 @@ class OutputWindow:
 
 class EnvConfigDialog:
     """环境配置对话框"""
-    def __init__(self, parent, python_path=None, env_name=None, description=None):
+    def __init__(self, parent, python_path=None):
         self.result = False
         self.python_path = python_path
         
@@ -303,10 +324,6 @@ class EnvConfigDialog:
         self.name_entry = ttk.Entry(name_frame)
         self.name_entry.pack(side=tk.LEFT, fill='x', expand=True, padx=(5,0))
         
-        # 如果提供了环境名称，预填充
-        if env_name:
-            self.name_entry.insert(0, env_name)
-        
         # 路径显示
         path_frame = ttk.Frame(self.dialog)
         path_frame.pack(fill='x', padx=10, pady=5)
@@ -320,23 +337,14 @@ class EnvConfigDialog:
         self.desc_text = tk.Text(desc_frame, height=5, wrap=tk.WORD)
         self.desc_text.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # 如果提供了描述，预填充
-        if description:
-            self.desc_text.insert('1.0', description)
-        
         # 包列表
         packages_frame = ttk.LabelFrame(self.dialog, text="已安装的包")
         packages_frame.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        pkg_btn_frame = ttk.Frame(packages_frame)
-        pkg_btn_frame.pack(fill='x', padx=5, pady=(5, 0))
-        ttk.Button(pkg_btn_frame, text="加载 pip 包列表", command=self.load_packages).pack(side=tk.LEFT)
-        
         self.packages_text = tk.Text(packages_frame, height=5, wrap=tk.WORD)
         self.packages_text.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # 如果提供了 python_path，获取环境信息（仅在新建时自动填充名称）
-        if python_path and not env_name:
+        # 如果提供了 python_path，获取环境信息
+        if python_path:
             self.load_env_info()
         
         # 按钮
@@ -359,39 +367,6 @@ class EnvConfigDialog:
         
         # 显示包列表
         self.packages_text.insert('1.0', info["packages"])
-        self.packages_text.config(state='disabled')
-    
-    def load_packages(self):
-        """调用 pip list 加载已安装的包"""
-        if not self.python_path:
-            messagebox.showwarning("警告", "未指定 Python 解释器路径")
-            return
-        
-        # 提示加载中
-        self.packages_text.config(state='normal')
-        self.packages_text.delete('1.0', tk.END)
-        self.packages_text.insert('1.0', "正在加载 pip 包列表...\n")
-        self.packages_text.update_idletasks()
-        
-        try:
-            result = subprocess.run(
-                [self.python_path, "-m", "pip", "list"],
-                capture_output=True,
-                text=True,
-                timeout=15
-            )
-            output = result.stdout.strip()
-            if not output:
-                output = result.stderr.strip() or "未获取到输出"
-        except subprocess.TimeoutExpired:
-            output = "加载超时（>15s）"
-        except FileNotFoundError:
-            output = "未找到指定的 Python 解释器路径"
-        except Exception as e:
-            output = f"加载失败: {e}"
-        
-        self.packages_text.delete('1.0', tk.END)
-        self.packages_text.insert('1.0', output)
         self.packages_text.config(state='disabled')
     
     def ok(self):
