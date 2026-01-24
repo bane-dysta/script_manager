@@ -1,3 +1,4 @@
+import copy
 import yaml
 from pathlib import Path
 from datetime import datetime
@@ -34,7 +35,7 @@ class ConfigManager:
         """加载配置文件"""
         if not self.config_path.exists():
             # 创建默认配置文件
-            self.config = self.default_config.copy()
+            self.config = copy.deepcopy(self.default_config)
         else:
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -49,7 +50,7 @@ class ConfigManager:
                     self.ensure_config_structure()
             except Exception as e:
                 messagebox.showerror("错误", f"加载配置文件失败: {str(e)}")
-                self.config = self.default_config.copy()
+                self.config = copy.deepcopy(self.default_config)
         
         # 确保配置文件包含所有必要的字段
         self.ensure_config_structure()
@@ -57,18 +58,27 @@ class ConfigManager:
     
     def ensure_config_structure(self):
         """确保配置文件包含所有必要的字段"""
+        if not isinstance(self.config, dict):
+            self.config = {}
+
         # 使用默认配置补充缺失的字段
         for key, value in self.default_config.items():
-            if key not in self.config:
-                self.config[key] = value.copy() if isinstance(value, dict) else value
-            elif isinstance(value, dict):
+            # 缺失或类型不匹配时，直接回退为默认值
+            if key not in self.config or self.config[key] is None or type(self.config[key]) is not type(value):
+                self.config[key] = copy.deepcopy(value)
+            elif isinstance(value, dict) and isinstance(self.config[key], dict):
                 # 递归检查嵌套的字典
                 for sub_key, sub_value in value.items():
                     if sub_key not in self.config[key]:
-                        if isinstance(sub_value, dict):
-                            self.config[key][sub_key] = sub_value.copy()
-                        else:
-                            self.config[key][sub_key] = sub_value
+                        self.config[key][sub_key] = copy.deepcopy(sub_value)
+
+        # scripts 字段兜底：必须是 dict[str, list]
+        if not isinstance(self.config.get("scripts"), dict):
+            self.config["scripts"] = copy.deepcopy(self.default_config["scripts"])
+
+        # python_environments 字段兜底：必须是 list
+        if not isinstance(self.config.get("python_environments"), list):
+            self.config["python_environments"] = []
         
         # 为现有脚本添加类型字段
         for category in self.config["scripts"].values():

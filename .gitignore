@@ -2,3 +2,5 @@
 /build
 launcher.exe
 __pycache__
+*.zip
+*.patch

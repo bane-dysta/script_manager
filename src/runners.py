@@ -1,7 +1,8 @@
 import os
 import subprocess
 from abc import ABC, abstractmethod
-from pathlib import Path
+
+from src.utils import split_arguments
 
 class ScriptRunner(ABC):
     """脚本运行器基类"""
@@ -37,6 +38,8 @@ class ScriptRunner(ABC):
             stderr=subprocess.PIPE if show_output else subprocess.DEVNULL,
             stdin=subprocess.PIPE if interactive else None,
             text=True,
+            errors="replace",
+            bufsize=1,
             cwd=working_dir,
             startupinfo=startupinfo,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
@@ -57,7 +60,7 @@ class PythonRunner(ScriptRunner):
         # 准备命令
         cmd = [env["path"], self.script_info["path"]]
         if arguments:
-            cmd.extend(arguments.split())
+            cmd.extend(split_arguments(arguments))
         return cmd
 
 class BatchRunner(ScriptRunner):
@@ -71,7 +74,7 @@ class BatchRunner(ScriptRunner):
             cmd = [self.script_info["path"]]
             
         if arguments:
-            cmd.extend(arguments.split())
+            cmd.extend(split_arguments(arguments))
         return cmd
     
     def run(self, arguments="", working_dir="", show_output=False, interactive=False):
@@ -108,7 +111,7 @@ class ExecutableRunner(ScriptRunner):
     def prepare_command(self, arguments, working_dir):
         cmd = [self.script_info["path"]]
         if arguments:
-            cmd.extend(arguments.split())
+            cmd.extend(split_arguments(arguments))
         return cmd
     
     def run(self, arguments="", working_dir="", show_output=False, interactive=False):
@@ -141,17 +144,20 @@ class PowerShellRunner(ScriptRunner):
         if os.name == 'nt':
             cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass']
         else:
-            # 在非Windows系统上使用pwsh
-            cmd = ['pwsh', '-NoProfile', '-ExecutionPolicy', 'Bypass']
+            # 在非Windows系统上使用 pwsh（非 Windows 下通常不需要/不支持 -ExecutionPolicy）
+            cmd = ['pwsh', '-NoProfile']
         
         # 如果不需要显示输出，添加静默运行参数
         if not self.show_output:
-            cmd.extend(['-WindowStyle', 'Hidden', '-NonInteractive'])
+            # -WindowStyle 仅在 Windows PowerShell 中有效
+            if os.name == 'nt':
+                cmd.extend(['-WindowStyle', 'Hidden'])
+            cmd.append('-NonInteractive')
         
         cmd.extend(['-File', self.script_info["path"]])
             
         if arguments:
-            cmd.extend(arguments.split())
+            cmd.extend(split_arguments(arguments))
         return cmd
     
     def run(self, arguments="", working_dir="", show_output=False, interactive=False):
