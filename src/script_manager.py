@@ -313,17 +313,37 @@ class ScriptManager:
                 
                 if info["supports_output"]:
                     widgets['show_output_var'] = tk.BooleanVar(value=True)
-                    ttk.Checkbutton(opt_frame, text="显示输出",
-                                  variable=widgets['show_output_var']).pack(side=tk.LEFT)
-                
+                    widgets['show_output_check'] = ttk.Checkbutton(
+                        opt_frame,
+                        text="显示输出",
+                        variable=widgets['show_output_var'],
+                        command=lambda st=script_type: self.on_show_output_changed(st)
+                    )
+                    widgets['show_output_check'].pack(side=tk.LEFT)
+
                 if info["supports_interactive"]:
                     widgets['interactive_var'] = tk.BooleanVar(value=False)
-                    ttk.Checkbutton(opt_frame, text="交互模式",
-                                  variable=widgets['interactive_var']).pack(side=tk.LEFT, padx=10)
-                
+                    widgets['interactive_check'] = ttk.Checkbutton(
+                        opt_frame,
+                        text="交互模式",
+                        variable=widgets['interactive_var'],
+                        command=lambda st=script_type: self.on_interactive_changed(st)
+                    )
+                    widgets['interactive_check'].pack(side=tk.LEFT, padx=10)
+
+                    widgets['capture_output_var'] = tk.BooleanVar(value=True)
+                    widgets['capture_output_check'] = ttk.Checkbutton(
+                        opt_frame,
+                        text="捕获输出（取消则终端输出）",
+                        variable=widgets['capture_output_var']
+                    )
+                    widgets['capture_output_check'].pack(side=tk.LEFT)
+
                 # 添加保存设置复选框
                 ttk.Checkbutton(opt_frame, text="保存为默认设置",
                               variable=self.save_var).pack(side=tk.LEFT, padx=10)
+
+                self.update_run_option_states(script_type)
             
             # 运行按钮
             btn_frame = ttk.Frame(frame)
@@ -574,10 +594,13 @@ class ScriptManager:
                     widgets['dir_entry'].insert(0, script["working_dir"])
             
             # 更新复选框状态
-            if "interactive_var" in widgets:
-                widgets['interactive_var'].set(script.get("interactive", False))
             if "show_output_var" in widgets:
                 widgets['show_output_var'].set(script.get("show_output", True))
+            if "interactive_var" in widgets:
+                widgets['interactive_var'].set(script.get("interactive", False))
+            if "capture_output_var" in widgets:
+                widgets['capture_output_var'].set(script.get("capture_output", True))
+            self.update_run_option_states(script_type)
 
     def _reset_drag_state(self):
         """重置脚本拖拽状态。"""
@@ -989,11 +1012,15 @@ class ScriptManager:
             if info["supports_interactive"] and "interactive_var" in widgets:
                 interactive = widgets["interactive_var"].get()
 
-            # 交互模式需要输出窗口，否则无法输入/查看输出
             if interactive and not show_output:
                 show_output = True
-                if info["supports_output"] and "show_output_var" in widgets:
+                if "show_output_var" in widgets:
                     widgets["show_output_var"].set(True)
+
+            # 交互模式下可选择：捕获输出（内置交互窗口）或终端输出
+            capture_output = True
+            if info["supports_interactive"] and "capture_output_var" in widgets:
+                capture_output = widgets['capture_output_var'].get()
             
             # 如果选择保存设置且脚本类型支持这些功能
             if hasattr(self, 'save_var') and self.save_var.get():
@@ -1008,9 +1035,11 @@ class ScriptManager:
                 
                 if info["supports_output"]:
                     save_data["show_output"] = show_output
-                
+
                 if info["supports_interactive"] and "interactive_var" in widgets:
                     save_data["interactive"] = interactive
+                    if "capture_output_var" in widgets:
+                        save_data["capture_output"] = widgets['capture_output_var'].get()
                 
                 if save_data:
                     script.update(save_data)
@@ -1020,14 +1049,17 @@ class ScriptManager:
             process = runner.run(
                 arguments=arguments,
                 working_dir=working_dir,
-                show_output=show_output,  # 使用实际的复选框状态
-                interactive=interactive
+                show_output=show_output,
+                interactive=interactive,
+                capture_output=capture_output
             )
-            
-            # 只在需要时创建输出窗口
-            if show_output:
+
+            # 显示输出时，非交互脚本始终使用内置窗口；
+            # 交互脚本则根据“捕获输出”决定使用内置窗口还是系统终端。
+            use_internal_window = show_output and (not interactive or capture_output)
+            if use_internal_window:
                 output_window = OutputWindow(
-                    self.root, 
+                    self.root,
                     script_to_run.get("name", ""),
                     interactive
                 )
@@ -1377,15 +1409,53 @@ class ScriptManager:
         except Exception as e:
             messagebox.showerror("错误", f"打开编辑器失败: {str(e)}")
 
-    def on_show_output_changed(self):
-        """处理显示输出复选框状态变化"""
-        if not self.show_output_var.get():
-            self.interactive_var.set(False)  # 如果取消显示输出,则自动取消交互模式
+    def update_run_option_states(self, script_type=None):
+        """根据当前勾选状态更新运行选项的可用性。"""
+        script_type = script_type or self.get_current_script_type()
+        widgets = self.config_widgets.get(script_type, {})
 
-    def on_interactive_changed(self):
-        """处理交互模式复选框状态变化"""
-        if self.interactive_var.get():
-            self.show_output_var.set(True)  # 如果选择交互模式,则自动勾选显示输出
+        show_output_var = widgets.get('show_output_var')
+        interactive_var = widgets.get('interactive_var')
+        interactive_check = widgets.get('interactive_check')
+        capture_output_check = widgets.get('capture_output_check')
+
+        show_output = show_output_var.get() if show_output_var is not None else False
+
+        if interactive_var is not None and not show_output:
+            interactive_var.set(False)
+
+        if interactive_check is not None:
+            if show_output:
+                interactive_check.state(['!disabled'])
+            else:
+                interactive_check.state(['disabled'])
+
+        interactive_enabled = interactive_var.get() if interactive_var is not None else False
+        if capture_output_check is not None:
+            if show_output and interactive_enabled:
+                capture_output_check.state(['!disabled'])
+            else:
+                capture_output_check.state(['disabled'])
+
+    def on_show_output_changed(self, script_type=None):
+        """处理“显示输出”复选框状态变化。"""
+        self.update_run_option_states(script_type)
+
+    def on_interactive_changed(self, script_type=None):
+        """处理“交互模式”复选框状态变化。"""
+        script_type = script_type or self.get_current_script_type()
+        widgets = self.config_widgets.get(script_type, {})
+
+        show_output_var = widgets.get('show_output_var')
+        interactive_var = widgets.get('interactive_var')
+
+        if show_output_var is None or interactive_var is None:
+            return
+
+        if interactive_var.get() and not show_output_var.get():
+            show_output_var.set(True)
+
+        self.update_run_option_states(script_type)
 
     def on_app_close(self):
         """窗口关闭时保存必要的界面状态。"""

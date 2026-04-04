@@ -1,1 +1,1 @@
-wsl tar -czvf scripts_manager.tgz src icon.ico  image.png  main.py  ps_hook.py  readme.md  requirements.txt  script_manager.spec  setup.py
+wsl tar -czvf scripts_manager.tgz --exclude='__pycache__' src icon.ico  image.png  main.py  ps_hook.py  readme.md  requirements.txt  script_manager.spec  setup.py
