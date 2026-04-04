@@ -14,6 +14,17 @@ class ScriptManager:
     def __init__(self):
         self.root = TkinterDnD.Tk()
         self.root.title("脚本管理器")
+
+        # 树形列表的拖拽排序状态
+        self.drag_state = {
+            "tree": None,
+            "item": None,
+            "script": None,
+            "source_category": None,
+            "script_type": None,
+            "start_y": 0,
+            "dragging": False,
+        }
         
         # 初始化配置管理器
         self.config_manager = ConfigManager()
@@ -123,6 +134,7 @@ class ScriptManager:
         # 为每种脚本类型创建页面
         self.script_pages = {}
         self.script_trees = {}
+        self.tree_item_refs = {}
         
         for script_type, info in self.script_types.items():
             page = ttk.Frame(self.script_notebook)
@@ -132,6 +144,7 @@ class ScriptManager:
             # 创建树形视图
             tree = self.create_script_tree(page, script_type)
             self.script_trees[script_type] = tree
+            self.tree_item_refs[script_type] = {}
             
             # 创建按钮框
             self.create_script_buttons(page, script_type)
@@ -202,6 +215,9 @@ class ScriptManager:
         # 绑定事件
         tree.bind('<<TreeviewSelect>>', lambda e: self.on_script_select(e, script_type))
         tree.bind('<Double-1>', lambda e: self.run_script())
+        tree.bind('<ButtonPress-1>', lambda e, st=script_type: self.on_tree_drag_start(e, st))
+        tree.bind('<B1-Motion>', lambda e, st=script_type: self.on_tree_drag_motion(e, st))
+        tree.bind('<ButtonRelease-1>', lambda e, st=script_type: self.on_tree_drag_release(e, st))
         
         # 启用拖放功能
         tree.drop_target_register(DND_FILES)
@@ -381,6 +397,7 @@ class ScriptManager:
         current_type = self.get_current_script_type()
         tree = self.script_trees[current_type]
         tree.delete(*tree.get_children())
+        self.tree_item_refs[current_type] = {}
         
         scripts_by_category = self.config.get("scripts", {}) or {}
 
@@ -391,23 +408,28 @@ class ScriptManager:
                 for s in scripts_by_category.get(category, [])
                 if s.get("script_type", "python") == current_type
             ]
+            visible_scripts = [
+                s for s in scripts
+                if not filter_text or filter_text in s.get("name", "").lower()
+            ]
             
-            if scripts:
+            if visible_scripts:
                 category_node = tree.insert("", "end", text=category, open=True)
-                for script in scripts:
-                    if filter_text and filter_text not in script["name"].lower():
-                        continue
-                    
+                for script in visible_scripts:
                     values = [script.get("description", "")]
                     if current_type == "python":
                         values.insert(0, script.get("env", ""))
                     
-                    tree.insert(
+                    item_id = tree.insert(
                         category_node,
                         "end",
                         text=script["name"],
                         values=tuple(values)
                     )
+                    self.tree_item_refs[current_type][item_id] = {
+                        "category": category,
+                        "script": script,
+                    }
     
     def get_current_script_type(self):
         """获取当前选中的脚本类型"""
@@ -450,24 +472,39 @@ class ScriptManager:
             return None, None, current_type
 
         item = selection[0]
-        parent = tree.parent(item)
+        script, category = self._get_script_from_tree_item(current_type, item)
+        return script, category, current_type
+
+    def _get_script_from_tree_item(self, script_type, item_id):
+        """根据树节点 id 获取脚本对象和所属分类。"""
+        if not item_id:
+            return None, None
+
+        ref = self.tree_item_refs.get(script_type, {}).get(item_id)
+        if ref:
+            return ref.get("script"), ref.get("category")
+
+        tree = self.script_trees.get(script_type)
+        if tree is None:
+            return None, None
+
+        parent = tree.parent(item_id)
         if not parent:
-            return None, None, current_type
+            return None, None
 
-        script_name = tree.item(item).get("text")
+        script_name = tree.item(item_id).get("text")
         category = tree.item(parent).get("text")
-
         script_list = (self.config.get("scripts", {}) or {}).get(category, [])
         script = next(
             (
                 s
                 for s in script_list
                 if s.get("name") == script_name
-                and s.get("script_type", "python") == current_type
+                and s.get("script_type", "python") == script_type
             ),
             None,
         )
-        return script, category, current_type
+        return script, category
 
     def _get_selected_env_name(self):
         """尝试从界面状态中获取一个 Python 环境名称。"""
@@ -509,26 +546,7 @@ class ScriptManager:
             return
         
         item = selection[0]
-        parent = tree.parent(item)
-        
-        # 如果选中的是分类节点，则返回
-        if not parent:
-            return
-        
-        # 获取脚本信息
-        script_name = tree.item(item)["text"]
-        category = tree.item(parent)["text"]
-        
-        script_list = (self.config.get("scripts", {}) or {}).get(category, [])
-        script = next(
-            (
-                s
-                for s in script_list
-                if s.get("name") == script_name
-                and s.get("script_type", "python") == script_type
-            ),
-            None,
-        )
+        script, category = self._get_script_from_tree_item(script_type, item)
         
         if script:
             # 更新信息面板
@@ -560,6 +578,266 @@ class ScriptManager:
                 widgets['interactive_var'].set(script.get("interactive", False))
             if "show_output_var" in widgets:
                 widgets['show_output_var'].set(script.get("show_output", True))
+
+    def _reset_drag_state(self):
+        """重置脚本拖拽状态。"""
+        tree = self.drag_state.get("tree")
+        if tree is not None:
+            try:
+                tree.configure(cursor="")
+            except Exception:
+                pass
+
+        self.drag_state = {
+            "tree": None,
+            "item": None,
+            "script": None,
+            "source_category": None,
+            "script_type": None,
+            "start_y": 0,
+            "dragging": False,
+        }
+
+    def on_tree_drag_start(self, event, script_type):
+        """记录拖拽起点，仅脚本节点允许参与排序。"""
+        tree = event.widget
+        item = tree.identify_row(event.y)
+        script, category = self._get_script_from_tree_item(script_type, item)
+
+        if not script:
+            self._reset_drag_state()
+            return
+
+        self.drag_state = {
+            "tree": tree,
+            "item": item,
+            "script": script,
+            "source_category": category,
+            "script_type": script_type,
+            "start_y": event.y,
+            "dragging": False,
+        }
+
+    def on_tree_drag_motion(self, event, script_type):
+        """处理脚本树的拖拽过程。"""
+        state = self.drag_state
+        tree = event.widget
+
+        if (
+            state.get("tree") is not tree
+            or state.get("script_type") != script_type
+            or not state.get("item")
+        ):
+            return
+
+        if not state.get("dragging"):
+            if abs(event.y - state.get("start_y", 0)) < 5:
+                return
+            state["dragging"] = True
+
+        try:
+            tree.configure(cursor="fleur")
+        except Exception:
+            pass
+
+        # 靠近顶部/底部时自动滚动，便于长列表拖动
+        if event.y < 20:
+            tree.yview_scroll(-1, "units")
+        elif event.y > max(20, tree.winfo_height() - 20):
+            tree.yview_scroll(1, "units")
+
+    def _get_drop_target_item(self, tree, y):
+        """获取拖拽释放时的目标节点。"""
+        item = tree.identify_row(y)
+        if item:
+            return item
+
+        categories = tree.get_children()
+        if not categories:
+            return ""
+
+        if y < 0:
+            first_category = categories[0]
+            children = tree.get_children(first_category)
+            return children[0] if children else first_category
+
+        last_category = categories[-1]
+        children = tree.get_children(last_category)
+        return children[-1] if children else last_category
+
+    def _rebuild_category_with_type_order(self, full_list, script_type, ordered_scripts):
+        """按新的同类型顺序重建分类列表，保持其他类型脚本位置不变。"""
+        ordered_iter = iter(ordered_scripts)
+        rebuilt = []
+
+        for item in full_list:
+            if item.get("script_type", "python") == script_type:
+                rebuilt.append(next(ordered_iter))
+            else:
+                rebuilt.append(item)
+
+        return rebuilt
+
+    def _reorder_scripts_in_same_category(self, category, script, target_script=None, place_after=False):
+        """在同一分类内重排同类型脚本，保留其他类型脚本的插入位置。"""
+        full_list = list((self.config.get("scripts", {}) or {}).get(category, []))
+        script_type = script.get("script_type", "python")
+
+        current_type_scripts = [
+            item for item in full_list
+            if item.get("script_type", "python") == script_type
+        ]
+        if script not in current_type_scripts:
+            return False
+
+        new_type_order = list(current_type_scripts)
+        new_type_order.remove(script)
+
+        if target_script is None:
+            new_type_order.append(script)
+        else:
+            try:
+                target_index = new_type_order.index(target_script)
+            except ValueError:
+                new_type_order.append(script)
+            else:
+                new_type_order.insert(target_index + (1 if place_after else 0), script)
+
+        if new_type_order == current_type_scripts:
+            return False
+
+        self.config["scripts"][category] = self._rebuild_category_with_type_order(
+            full_list,
+            script_type,
+            new_type_order,
+        )
+        return True
+
+    def _get_cross_category_insert_index(self, target_list, script_type, target_script=None, place_after=False):
+        """计算跨分类拖拽时在目标分类中的插入位置。"""
+        if target_script is not None:
+            try:
+                target_index = target_list.index(target_script)
+            except ValueError:
+                target_index = None
+            if target_index is not None:
+                return target_index + (1 if place_after else 0)
+
+        for index in range(len(target_list) - 1, -1, -1):
+            if target_list[index].get("script_type", "python") == script_type:
+                return index + 1
+
+        return len(target_list)
+
+    def _move_script_by_drag(self, script, source_category, target_category, target_script=None, place_after=False):
+        """根据拖拽结果更新配置中的脚本顺序。"""
+        if source_category == target_category:
+            return self._reorder_scripts_in_same_category(
+                source_category,
+                script,
+                target_script=target_script,
+                place_after=place_after,
+            )
+
+        scripts_by_category = self.config.setdefault("scripts", {})
+        source_list = list(scripts_by_category.get(source_category, []))
+        target_list = list(scripts_by_category.get(target_category, []))
+
+        if script not in source_list:
+            return False
+
+        source_list.remove(script)
+
+        insert_index = self._get_cross_category_insert_index(
+            target_list,
+            script.get("script_type", "python"),
+            target_script=target_script,
+            place_after=place_after,
+        )
+        target_list.insert(insert_index, script)
+
+        scripts_by_category[source_category] = source_list
+        scripts_by_category[target_category] = target_list
+        script["category"] = target_category
+        return True
+
+    def _select_script_in_tree(self, script_type, script):
+        """刷新列表后重新选中指定脚本。"""
+        tree = self.script_trees.get(script_type)
+        if tree is None:
+            return
+
+        for item_id, ref in self.tree_item_refs.get(script_type, {}).items():
+            if ref.get("script") is script:
+                tree.selection_set(item_id)
+                tree.focus(item_id)
+                tree.see(item_id)
+                tree.event_generate('<<TreeviewSelect>>')
+                return
+
+    def on_tree_drag_release(self, event, script_type):
+        """拖拽释放时完成脚本重排。"""
+        state = self.drag_state
+        tree = event.widget
+
+        if (
+            state.get("tree") is not tree
+            or state.get("script_type") != script_type
+            or not state.get("item")
+        ):
+            self._reset_drag_state()
+            return
+
+        if not state.get("dragging"):
+            self._reset_drag_state()
+            return
+
+        target_item = self._get_drop_target_item(tree, event.y)
+        source_item = state.get("item")
+        dragged_script = state.get("script")
+        source_category = state.get("source_category")
+
+        if not target_item or not dragged_script or not source_category:
+            self._reset_drag_state()
+            return
+
+        target_script = None
+        target_category = None
+        place_after = False
+
+        potential_target_script, potential_target_category = self._get_script_from_tree_item(script_type, target_item)
+        if potential_target_script is not None:
+            target_script = potential_target_script
+            target_category = potential_target_category
+
+            if target_script is dragged_script:
+                self._reset_drag_state()
+                return
+
+            bbox = tree.bbox(target_item)
+            if bbox:
+                place_after = event.y >= bbox[1] + (bbox[3] / 2)
+        else:
+            target_category = tree.item(target_item).get("text")
+
+        if not target_category:
+            self._reset_drag_state()
+            return
+
+        moved = self._move_script_by_drag(
+            dragged_script,
+            source_category,
+            target_category,
+            target_script=target_script,
+            place_after=place_after,
+        )
+
+        if moved:
+            self.config_manager.save_config()
+            self.update_script_list(self.search_var.get().lower())
+            self._select_script_in_tree(script_type, dragged_script)
+
+        self._reset_drag_state()
     
     def on_drop_script(self, event, script_type=None):
         """处理脚本文件拖放"""

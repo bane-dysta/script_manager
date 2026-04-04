@@ -4,3 +4,4 @@ launcher.exe
 __pycache__
 *.zip
 *.patch
+*.tgz
