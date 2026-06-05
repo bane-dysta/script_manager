@@ -1331,23 +1331,44 @@ class ScriptManager:
             self.update_script_list()
     
     def open_script_location(self):
-        """打开选中脚本所在的文件夹"""
+        """打开选中脚本所在的文件夹，并尽量选中脚本文件"""
         script, _, _ = self._get_selected_script()
         if not script or "path" not in script:
             return
 
         try:
-            script_dir = Path(script["path"]).parent
+            script_path = Path(script["path"])
+            if not script_path.exists():
+                messagebox.showerror("错误", "脚本文件不存在")
+                return
+
+            script_dir = script_path.parent
             if not script_dir.exists():
                 messagebox.showerror("错误", "脚本所在目录不存在")
                 return
 
             if sys.platform == "win32":
-                os.startfile(script_dir)
+                # Windows Explorer 支持 /select, 参数，打开父目录并选中文件
+                subprocess.run(["explorer", f"/select,{script_path}"])
             elif sys.platform == "darwin":  # macOS
-                subprocess.run(["open", str(script_dir)])
+                # Finder 的 -R 参数会 reveal 文件，即打开父目录并选中文件
+                subprocess.run(["open", "-R", str(script_path)])
             else:  # Linux
-                subprocess.run(["xdg-open", str(script_dir)])
+                # freedesktop FileManager1 接口支持 ShowItems，常见文件管理器可据此选中文件
+                try:
+                    subprocess.run([
+                        "dbus-send",
+                        "--session",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems",
+                        f"array:string:{script_path.resolve().as_uri()}",
+                        "string:",
+                    ], check=True)
+                except Exception:
+                    # 部分 Linux 文件管理器不支持选中文件，降级为打开所在目录
+                    subprocess.run(["xdg-open", str(script_dir)])
         except Exception as e:
             messagebox.showerror("错误", f"打开目录失败: {str(e)}")
 

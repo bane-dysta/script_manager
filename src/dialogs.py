@@ -5,6 +5,25 @@ import threading
 import queue
 from pathlib import Path
 
+
+def center_window(window, width=None, height=None):
+    """将 Tk/Toplevel 窗口居中显示在屏幕中间。"""
+    window.update_idletasks()
+
+    if width is None or height is None:
+        current_width = window.winfo_width()
+        current_height = window.winfo_height()
+        req_width = window.winfo_reqwidth()
+        req_height = window.winfo_reqheight()
+        width = width or (current_width if current_width > 1 else req_width)
+        height = height or (current_height if current_height > 1 else req_height)
+
+    screen_width = window.winfo_screenwidth()
+    screen_height = window.winfo_screenheight()
+    x = max(0, (screen_width - width) // 2)
+    y = max(0, (screen_height - height) // 2)
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
 class ScriptConfigDialog:
     """脚本配置对话框"""
     def __init__(self, parent, environments, name="", path="", env="", description="", 
@@ -13,10 +32,10 @@ class ScriptConfigDialog:
         
         # 创建对话框
         self.dialog = tk.Toplevel(parent)
+        self.dialog.withdraw()  # 避免窗口先在左上角闪现
         self.dialog.title("脚本配置")
-        self.dialog.geometry("400x400")  # 增加高度以容纳新控件
+        self.dialog.geometry("400x500")  # 增加高度以容纳新控件
         self.dialog.transient(parent)
-        self.dialog.grab_set()
         
         # 初始化变量
         self.env_var = tk.StringVar(value=env if env else "")
@@ -85,7 +104,9 @@ class ScriptConfigDialog:
         ttk.Button(btn_frame, text="确定", command=self.ok).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text="取消", command=self.cancel).pack(side=tk.RIGHT)
         
-        # 设置对话框为模态
+        # 设置对话框为模态，并在显示前居中
+        center_window(self.dialog, 400, 500)
+        self.dialog.deiconify()
         self.dialog.grab_set()
         self.dialog.focus_set()
         self.dialog.wait_window()
@@ -137,6 +158,7 @@ class OutputWindow:
     """脚本输出窗口"""
     def __init__(self, parent, title, interactive=False):
         self.window = tk.Toplevel(parent)
+        self.window.withdraw()  # 避免窗口先在左上角闪现
         self.window.title(f"运行: {title}")
         self.window.geometry("400x500")
         
@@ -201,6 +223,9 @@ class OutputWindow:
         
         # 标记进程是否应该继续运行
         self.running = True
+
+        center_window(self.window, 400, 500)
+        self.window.deiconify()
     
     def send_input(self):
         """发送输入到脚本"""
@@ -312,10 +337,10 @@ class EnvConfigDialog:
         
         # 创建对话框
         self.dialog = tk.Toplevel(parent)
+        self.dialog.withdraw()  # 避免窗口先在左上角闪现
         self.dialog.title("环境配置")
-        self.dialog.geometry("400x400")
+        self.dialog.geometry("400x500")
         self.dialog.transient(parent)
-        self.dialog.grab_set()
         
         # 名称
         name_frame = ttk.Frame(self.dialog)
@@ -354,6 +379,10 @@ class EnvConfigDialog:
         ttk.Button(btn_frame, text="确定", command=self.ok).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text="取消", command=self.cancel).pack(side=tk.RIGHT)
         
+        center_window(self.dialog, 400, 500)
+        self.dialog.deiconify()
+        self.dialog.grab_set()
+        self.dialog.focus_set()
         self.dialog.wait_window()
     
     def load_env_info(self):
@@ -392,10 +421,10 @@ class CategoryDialog:
         
         # 创建对话框
         self.dialog = tk.Toplevel(parent)
+        self.dialog.withdraw()  # 避免窗口先在左上角闪现
         self.dialog.title("编辑分类")
-        self.dialog.geometry("300x400")
+        self.dialog.geometry("400x500")
         self.dialog.transient(parent)
-        self.dialog.grab_set()
         
         # 创建列表框和滚动条
         frame = ttk.Frame(self.dialog)
@@ -443,7 +472,9 @@ class CategoryDialog:
         ttk.Button(action_frame, text="确定", command=self.ok).pack(side=tk.RIGHT, padx=5)
         ttk.Button(action_frame, text="取消", command=self.cancel).pack(side=tk.RIGHT)
         
-        # 设置对话框为模态
+        # 设置对话框为模态，并在显示前居中
+        center_window(self.dialog, 400, 500)
+        self.dialog.deiconify()
         self.dialog.grab_set()
         self.dialog.focus_set()
         self.dialog.wait_window()
