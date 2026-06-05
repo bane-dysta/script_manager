@@ -1,10 +1,88 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_dynamic_libs
 import tkinterdnd2
 
 block_cipher = None
+
+
+def collect_tcl_tk_data():
+    """显式收集 Tcl/Tk 运行时数据，避免打包后缺少 _tk_data/_tcl_data。"""
+    datas = []
+    seen_destinations = set()
+
+    def add_data(source, destination):
+        if not source:
+            return
+        source_path = Path(source)
+        if not source_path.is_dir():
+            return
+        key = (str(source_path.resolve()), destination)
+        if key in seen_destinations:
+            return
+        datas.append((str(source_path), destination))
+        seen_destinations.add(key)
+
+    # 优先从当前 Python 的 Tcl 解释器读取真实路径。
+    try:
+        import tkinter
+
+        tcl = tkinter.Tcl()
+        add_data(tcl.eval("info library"), "_tcl_data")
+        try:
+            tcl.eval("package require Tk")
+            add_data(tcl.eval("set tk_library"), "_tk_data")
+        except Exception:
+            # 无显示环境或 Tk 未能加载时，继续走下面的目录扫描兜底。
+            pass
+    except Exception:
+        pass
+
+    # Windows 官方 Python 通常在 <python>/tcl/tcl8.x 和 <python>/tcl/tk8.x；
+    # Conda/部分发行版可能在 Library/lib 或 lib 下。
+    search_roots = [
+        Path(sys.base_prefix) / "tcl",
+        Path(sys.prefix) / "tcl",
+        Path(sys.exec_prefix) / "tcl",
+        Path(sys.base_prefix) / "Library" / "lib",
+        Path(sys.prefix) / "Library" / "lib",
+        Path(sys.exec_prefix) / "Library" / "lib",
+        Path(sys.base_prefix) / "lib",
+        Path(sys.prefix) / "lib",
+        Path(sys.exec_prefix) / "lib",
+    ]
+
+    destinations = {destination for _, destination in datas}
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        if "_tcl_data" not in destinations:
+            for candidate in sorted(root.glob("tcl*")):
+                if candidate.is_dir() and (candidate / "init.tcl").exists():
+                    add_data(candidate, "_tcl_data")
+                    destinations.add("_tcl_data")
+                    break
+        if "_tk_data" not in destinations:
+            for candidate in sorted(root.glob("tk*")):
+                if candidate.is_dir() and (candidate / "tk.tcl").exists():
+                    add_data(candidate, "_tk_data")
+                    destinations.add("_tk_data")
+                    break
+
+    missing = {"_tcl_data", "_tk_data"} - {destination for _, destination in datas}
+    if missing:
+        raise RuntimeError(
+            "未找到 Tcl/Tk 数据目录："
+            + ", ".join(sorted(missing))
+            + "。请确认构建环境的 Python 已安装/启用 tkinter，并先运行 `python -m tkinter` 测试。"
+        )
+
+    return datas
+
+
+tcl_tk_datas = collect_tcl_tk_data()
 
 # Get tkinterdnd2 path
 tkdnd_path = os.path.dirname(tkinterdnd2.__file__)
@@ -57,9 +135,12 @@ a = Analysis(
     pathex=[],
     binaries=tkdnd_files,  # Add tkdnd DLL files
     datas=[
+        *tcl_tk_datas,  # Add Tcl/Tk runtime data used by tkinter
         (tkdnd_lib, 'tkinterdnd2/tkdnd'),  # Add tkdnd data files
     ],
     hiddenimports=[
+        'tkinter',
+        '_tkinter',
         'tkinterdnd2',
         'yaml',
         'src.script_manager',
